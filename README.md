@@ -42,6 +42,8 @@ Index PDFs:
 python rag_app.py index --pdf-dir ./pdfs
 ```
 
+> Note: for safety, `--pdf-dir` must resolve to a directory inside the current working directory.
+
 Ask a question:
 
 ```bash

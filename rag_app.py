@@ -36,6 +36,19 @@ CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "pdf_chunks")
 
 
+def validate_pdf_dir(pdf_dir: Path) -> Path:
+    candidate = pdf_dir.expanduser().resolve(strict=True)
+    if not candidate.is_dir():
+        raise ValueError(f"Not a directory: {candidate}")
+
+    base_dir = Path.cwd().resolve()
+    if candidate != base_dir and base_dir not in candidate.parents:
+        raise ValueError(
+            f"Directory must be inside {base_dir}. Received: {candidate}"
+        )
+    return candidate
+
+
 def pdf_documents(pdf_dir: Path) -> List[Document]:
     docs: List[Document] = []
     for pdf in sorted(pdf_dir.glob("*.pdf")):
@@ -75,7 +88,7 @@ def get_vectorstore() -> Chroma:
 
 
 def index_pdfs(pdf_dir: Path) -> Tuple[int, int]:
-    docs = pdf_documents(pdf_dir)
+    docs = pdf_documents(validate_pdf_dir(pdf_dir))
     chunks = split_documents(docs)
     store = get_vectorstore()
     if chunks:
@@ -180,7 +193,11 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.cmd == "index":
-        docs_n, chunks_n = index_pdfs(args.pdf_dir)
+        try:
+            docs_n, chunks_n = index_pdfs(args.pdf_dir)
+        except (ValueError, FileNotFoundError) as exc:
+            print(str(exc))
+            return
         print(f"Indexed {docs_n} pages into {chunks_n} chunks in {CHROMA_DIR}")
     elif args.cmd == "ask":
         try:
