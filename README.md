@@ -56,6 +56,12 @@ Ask in German (Antwort auf Deutsch):
 python rag_app.py ask --question "Was sind die wichtigsten Erkenntnisse?" --language de
 ```
 
+Ask for CSV output and save to file:
+
+```bash
+python rag_app.py ask --question "List product names and prices as CSV" --csv-out ./output/answer.csv
+```
+
 ## Streamlit usage
 
 ```bash
@@ -63,6 +69,7 @@ streamlit run rag_app.py
 ```
 
 In Streamlit, choose **"Antwortsprache / Answer language"** and select **Deutsch** for German answers.
+If your question asks for CSV output, the app also shows a **Download CSV** button.
 
 ## Optional environment variables
 

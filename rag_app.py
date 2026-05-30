@@ -74,6 +74,12 @@ def normalize_language(language: str) -> str:
     return value
 
 
+def is_csv_request(question: str) -> bool:
+    value = question.lower()
+    keywords = ("csv", "comma-separated", "comma separated", "kommagetrennt")
+    return any(keyword in value for keyword in keywords)
+
+
 def split_documents(docs: Sequence[Document], chunk_size: int = 1000, overlap: int = 150) -> List[Document]:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -127,9 +133,17 @@ def rerank(question: str, docs: Sequence[Document], top_n: int = 5) -> List[Docu
     return compressor.compress_documents(list(docs), query=question)
 
 
-def answer_question(question: str, k: int = 8, top_n: int = 5, language: str = "en") -> Tuple[str, List[Document]]:
+def answer_question(
+    question: str,
+    k: int = 8,
+    top_n: int = 5,
+    language: str = "en",
+    output_format: str = "text",
+) -> Tuple[str, List[Document]]:
     language = normalize_language(language)
     language_name = LANGUAGE_NAMES[language]
+    if output_format not in {"text", "csv"}:
+        raise ValueError("Unsupported output format. Use 'text' or 'csv'.")
     retriever = build_hybrid_retriever(k=k)
     retrieved = retriever.invoke(question)
     final_docs = rerank(question, retrieved, top_n=top_n)
@@ -137,6 +151,13 @@ def answer_question(question: str, k: int = 8, top_n: int = 5, language: str = "
     context = "\n\n".join(
         f"[Source: {d.metadata.get('filename', 'unknown')} | Page: {d.metadata.get('page', 'n/a')}]\n{d.page_content}"
         for d in final_docs
+    )
+
+    format_instruction = (
+        "Return only RFC4180-compatible CSV with a single header row. "
+        "Do not include markdown code fences or extra explanatory text."
+        if output_format == "csv"
+        else "Provide a concise answer and cite sources as [filename p.X]."
     )
 
     prompt = ChatPromptTemplate.from_messages(
@@ -150,13 +171,20 @@ def answer_question(question: str, k: int = 8, top_n: int = 5, language: str = "
             (
                 "human",
                 "Question: {question}\n\nContext:\n{context}\n\n"
-                "Provide a concise answer and cite sources as [filename p.X].",
+                "{format_instruction}",
             ),
         ]
     )
 
     chain = prompt | ChatOllama(model=LLM_MODEL, temperature=0) | StrOutputParser()
-    answer = chain.invoke({"question": question, "context": context, "language_name": language_name})
+    answer = chain.invoke(
+        {
+            "question": question,
+            "context": context,
+            "language_name": language_name,
+            "format_instruction": format_instruction,
+        }
+    )
     return answer, final_docs
 
 
@@ -164,6 +192,21 @@ def render_streamlit() -> None:
     import streamlit as st
 
     st.set_page_config(page_title="Local PDF RAG Analyzer", layout="wide")
+    st.markdown(
+        """
+        <style>
+        div[data-baseweb="select"] > div {
+            border-color: #16a34a !important;
+            box-shadow: 0 0 0 1px #16a34a !important;
+        }
+        div[role="listbox"] [aria-selected="true"] {
+            background-color: #16a34a !important;
+            color: white !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.title("📄 Local PDF RAG Analyzer")
     st.caption("Ollama + ChromaDB + Hybrid Search (BM25 + Vector) + Re-ranking")
     language_labels = {"English": "en", "Deutsch": "de"}
@@ -181,9 +224,18 @@ def render_streamlit() -> None:
     question = st.text_area("Ask a question about your PDFs")
     if st.button("Run RAG") and question.strip():
         with st.spinner("Thinking..."):
-            answer, docs = answer_question(question, language=answer_language)
+            csv_requested = is_csv_request(question)
+            output_format = "csv" if csv_requested else "text"
+            answer, docs = answer_question(question, language=answer_language, output_format=output_format)
         st.subheader("Answer")
         st.write(answer)
+        if csv_requested:
+            st.download_button(
+                "Download CSV",
+                data=answer,
+                file_name="answer.csv",
+                mime="text/csv",
+            )
 
         st.subheader("Source citations")
         for i, d in enumerate(docs, start=1):
@@ -205,6 +257,7 @@ def main() -> None:
     p_ask.add_argument("--k", type=int, default=8)
     p_ask.add_argument("--top-n", type=int, default=5)
     p_ask.add_argument("--language", default=APP_LANGUAGE, choices=tuple(LANGUAGE_NAMES.keys()))
+    p_ask.add_argument("--csv-out", default=None, help="Optional path to write CSV output")
 
     args = parser.parse_args()
 
@@ -217,12 +270,25 @@ def main() -> None:
         print(f"Indexed {docs_n} pages into {chunks_n} chunks in {CHROMA_DIR}")
     elif args.cmd == "ask":
         try:
-            answer, docs = answer_question(args.question, k=args.k, top_n=args.top_n, language=args.language)
+            csv_requested = bool(args.csv_out) or is_csv_request(args.question)
+            output_format = "csv" if csv_requested else "text"
+            answer, docs = answer_question(
+                args.question,
+                k=args.k,
+                top_n=args.top_n,
+                language=args.language,
+                output_format=output_format,
+            )
         except ValueError as exc:
             print(str(exc))
             return
         print("\nAnswer:\n")
         print(answer)
+        if csv_requested:
+            csv_path = Path(args.csv_out or "answer.csv")
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            csv_path.write_text(answer, encoding="utf-8")
+            print(f"\nCSV written to: {csv_path}")
         print("\nCitations:")
         for d in docs:
             print(f"- {d.metadata.get('filename', 'unknown')} p.{d.metadata.get('page', 'n/a')}")
