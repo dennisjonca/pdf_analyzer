@@ -8,11 +8,12 @@ This repository now includes a complete, runnable Python script at:
 - `/tmp/workspace/dennisjonca/pdf_analyzer/rag_app.py`
 
 Features included:
-- Local Ollama LLM + real embedding model (`nomic-embed-text` by default)
+- Local Ollama LLM + stronger embedding model (`mxbai-embed-large` by default)
 - PDF ingestion with metadata (`filename`, `source`, `page`)
 - ChromaDB persistent vector store
-- Hybrid retrieval (BM25 + Vector Search)
-- Re-ranking (`BAAI/bge-reranker-base` by default)
+- Paragraph-aware, heading-aware chunking with page-preserving metadata
+- Hybrid retrieval (BM25 + Vector Search) with larger default candidate set
+- Re-ranking (`BAAI/bge-reranker-v2-m3` by default)
 - Source citations in responses
 - Streamlit web interface
 
@@ -29,7 +30,7 @@ Make sure Ollama is running locally and pull models:
 
 ```bash
 ollama pull llama3.1:8b
-ollama pull nomic-embed-text
+ollama pull mxbai-embed-large
 ```
 
 Create a `pdfs/` folder and add your PDF files.
@@ -75,8 +76,10 @@ If your question asks for CSV output, the app also shows a **Download CSV** butt
 ## Optional environment variables
 
 - `LLM_MODEL` (default: `llama3.1:8b`)
-- `EMBEDDING_MODEL` (default: `nomic-embed-text`)
-- `RERANK_MODEL` (default: `BAAI/bge-reranker-base`)
+- `EMBEDDING_MODEL` (default: `mxbai-embed-large`)
+- `RERANK_MODEL` (default: `BAAI/bge-reranker-v2-m3`)
+- `RETRIEVAL_K` (default: `12`)
+- `RERANK_TOP_N` (default: `6`)
 - `CHROMA_DIR` (default: `./chroma_db`)
 - `CHROMA_COLLECTION` (default: `pdf_chunks`)
 - `APP_LANGUAGE` (default: `en`, supported: `en`, `de`)

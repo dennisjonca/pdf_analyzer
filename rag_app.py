@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 from typing import List, Sequence, Tuple
 
@@ -29,12 +30,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
 
 
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
-RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-base")
+RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "pdf_chunks")
 APP_LANGUAGE = os.getenv("APP_LANGUAGE", "en")
+DEFAULT_RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "12"))
+DEFAULT_RERANK_TOP_N = int(os.getenv("RERANK_TOP_N", "6"))
 LANGUAGE_NAMES = {"en": "English", "de": "German"}
 
 
@@ -80,11 +83,50 @@ def is_csv_request(question: str) -> bool:
     return any(keyword in value for keyword in keywords)
 
 
+def is_heading(text: str) -> bool:
+    value = text.strip()
+    if not value or len(value) > 120:
+        return False
+    if value.endswith((".", "!", "?", ";", ":")):
+        return False
+    words = value.split()
+    if len(words) > 12:
+        return False
+    if re.match(r"^(\d+(\.\d+)*)\s+[A-ZÄÖÜ]", value):
+        return True
+    uppercase_ratio = sum(1 for c in value if c.isupper()) / max(1, sum(1 for c in value if c.isalpha()))
+    return uppercase_ratio > 0.6 or value.istitle()
+
+
+def paragraph_documents(docs: Sequence[Document]) -> List[Document]:
+    paragraph_docs: List[Document] = []
+    for doc in docs:
+        paragraphs = [
+            part.strip()
+            for part in re.split(r"\n\s*\n+", doc.page_content.replace("\r\n", "\n"))
+            if part.strip()
+        ]
+        current_heading = doc.metadata.get("heading")
+        for part in paragraphs:
+            if is_heading(part):
+                current_heading = part
+                continue
+            metadata = dict(doc.metadata)
+            if current_heading:
+                metadata["heading"] = current_heading
+            paragraph_docs.append(Document(page_content=part, metadata=metadata))
+    return paragraph_docs or list(docs)
+
+
 def split_documents(docs: Sequence[Document], chunk_size: int = 1000, overlap: int = 150) -> List[Document]:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
-    return splitter.split_documents(list(docs))
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+        separators=["\n# ", "\n## ", "\n### ", "\n\n", "\n", ". ", " ", ""],
+    )
+    return splitter.split_documents(paragraph_documents(docs))
 
 
 def get_embeddings() -> OllamaEmbeddings:
@@ -113,7 +155,7 @@ def index_pdfs(pdf_dir: Path) -> Tuple[int, int]:
     return len(docs), len(chunks)
 
 
-def build_hybrid_retriever(k: int = 8) -> EnsembleRetriever:
+def build_hybrid_retriever(k: int = DEFAULT_RETRIEVAL_K) -> EnsembleRetriever:
     store = get_vectorstore()
     if store._collection.count() == 0:  # pylint: disable=protected-access
         raise ValueError(
@@ -121,14 +163,20 @@ def build_hybrid_retriever(k: int = 8) -> EnsembleRetriever:
         )
     vector_retriever = store.as_retriever(search_kwargs={"k": k})
 
-    all_docs = store.similarity_search(" ", k=300)
+    all_items = store._collection.get(include=["documents", "metadatas"])  # pylint: disable=protected-access
+    all_docs = [
+        Document(page_content=page_content, metadata=metadata or {})
+        for page_content, metadata in zip(all_items.get("documents", []), all_items.get("metadatas", []))
+    ]
+    if not all_docs:
+        all_docs = store.similarity_search(" ", k=max(k * 20, 300))
     bm25 = BM25Retriever.from_documents(all_docs)
     bm25.k = k
 
     return EnsembleRetriever(retrievers=[bm25, vector_retriever], weights=[0.4, 0.6])
 
 
-def rerank(question: str, docs: Sequence[Document], top_n: int = 5) -> List[Document]:
+def rerank(question: str, docs: Sequence[Document], top_n: int = DEFAULT_RERANK_TOP_N) -> List[Document]:
     if not docs:
         return []
     compressor = CrossEncoderReranker(model=HuggingFaceCrossEncoder(model_name=RERANK_MODEL), top_n=top_n)
@@ -137,8 +185,8 @@ def rerank(question: str, docs: Sequence[Document], top_n: int = 5) -> List[Docu
 
 def answer_question(
     question: str,
-    k: int = 8,
-    top_n: int = 5,
+    k: int = DEFAULT_RETRIEVAL_K,
+    top_n: int = DEFAULT_RERANK_TOP_N,
     language: str = "en",
     output_format: str = "text",
 ) -> Tuple[str, List[Document]]:
@@ -241,8 +289,8 @@ def main() -> None:
 
     p_ask = sub.add_parser("ask", help="Ask question over indexed PDFs")
     p_ask.add_argument("--question", required=True)
-    p_ask.add_argument("--k", type=int, default=8)
-    p_ask.add_argument("--top-n", type=int, default=5)
+    p_ask.add_argument("--k", type=int, default=DEFAULT_RETRIEVAL_K)
+    p_ask.add_argument("--top-n", type=int, default=DEFAULT_RERANK_TOP_N)
     p_ask.add_argument("--language", default=APP_LANGUAGE, choices=tuple(LANGUAGE_NAMES.keys()))
     p_ask.add_argument("--csv-out", default=None, help="Optional path to write CSV output")
 
