@@ -106,6 +106,8 @@ def index_pdfs(pdf_dir: Path) -> Tuple[int, int]:
     docs = pdf_documents(validate_pdf_dir(pdf_dir))
     chunks = split_documents(docs)
     store = get_vectorstore()
+    store.delete_collection()
+    store = get_vectorstore()
     if chunks:
         store.add_documents(chunks)
     return len(docs), len(chunks)
@@ -192,21 +194,6 @@ def render_streamlit() -> None:
     import streamlit as st
 
     st.set_page_config(page_title="Local PDF RAG Analyzer", layout="wide")
-    st.markdown(
-        """
-        <style>
-        div[data-baseweb="select"] > div {
-            border-color: #16a34a !important;
-            box-shadow: 0 0 0 1px #16a34a !important;
-        }
-        div[role="listbox"] [aria-selected="true"] {
-            background-color: #16a34a !important;
-            color: white !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     st.title("📄 Local PDF RAG Analyzer")
     st.caption("Ollama + ChromaDB + Hybrid Search (BM25 + Vector) + Re-ranking")
     language_labels = {"English": "en", "Deutsch": "de"}
