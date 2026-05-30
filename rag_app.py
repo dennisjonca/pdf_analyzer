@@ -34,6 +34,8 @@ LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1:8b")
 RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-base")
 CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "pdf_chunks")
+APP_LANGUAGE = os.getenv("APP_LANGUAGE", "en")
+LANGUAGE_NAMES = {"en": "English", "de": "German"}
 
 
 def validate_pdf_dir(pdf_dir: Path) -> Path:
@@ -63,6 +65,13 @@ def pdf_documents(pdf_dir: Path) -> List[Document]:
             }
         docs.extend(pages)
     return docs
+
+
+def normalize_language(language: str) -> str:
+    value = language.strip().lower()
+    if value not in LANGUAGE_NAMES:
+        raise ValueError("Unsupported language. Use one of: en, de.")
+    return value
 
 
 def split_documents(docs: Sequence[Document], chunk_size: int = 1000, overlap: int = 150) -> List[Document]:
@@ -118,7 +127,9 @@ def rerank(question: str, docs: Sequence[Document], top_n: int = 5) -> List[Docu
     return compressor.compress_documents(list(docs), query=question)
 
 
-def answer_question(question: str, k: int = 8, top_n: int = 5) -> Tuple[str, List[Document]]:
+def answer_question(question: str, k: int = 8, top_n: int = 5, language: str = "en") -> Tuple[str, List[Document]]:
+    language = normalize_language(language)
+    language_name = LANGUAGE_NAMES[language]
     retriever = build_hybrid_retriever(k=k)
     retrieved = retriever.invoke(question)
     final_docs = rerank(question, retrieved, top_n=top_n)
@@ -133,7 +144,8 @@ def answer_question(question: str, k: int = 8, top_n: int = 5) -> Tuple[str, Lis
             (
                 "system",
                 "You are a helpful PDF analyst. Only answer from the provided context. "
-                "If context is insufficient, say so clearly.",
+                "If context is insufficient, say so clearly. "
+                "Respond in {language_name}.",
             ),
             (
                 "human",
@@ -144,7 +156,7 @@ def answer_question(question: str, k: int = 8, top_n: int = 5) -> Tuple[str, Lis
     )
 
     chain = prompt | ChatOllama(model=LLM_MODEL, temperature=0) | StrOutputParser()
-    answer = chain.invoke({"question": question, "context": context})
+    answer = chain.invoke({"question": question, "context": context, "language_name": language_name})
     return answer, final_docs
 
 
@@ -154,6 +166,9 @@ def render_streamlit() -> None:
     st.set_page_config(page_title="Local PDF RAG Analyzer", layout="wide")
     st.title("📄 Local PDF RAG Analyzer")
     st.caption("Ollama + ChromaDB + Hybrid Search (BM25 + Vector) + Re-ranking")
+    language_labels = {"English": "en", "Deutsch": "de"}
+    selected_label = st.selectbox("Antwortsprache / Answer language", tuple(language_labels.keys()), index=1)
+    answer_language = language_labels[selected_label]
 
     pdf_dir = st.text_input("PDF directory", value="./pdfs")
 
@@ -166,7 +181,7 @@ def render_streamlit() -> None:
     question = st.text_area("Ask a question about your PDFs")
     if st.button("Run RAG") and question.strip():
         with st.spinner("Thinking..."):
-            answer, docs = answer_question(question)
+            answer, docs = answer_question(question, language=answer_language)
         st.subheader("Answer")
         st.write(answer)
 
@@ -189,6 +204,7 @@ def main() -> None:
     p_ask.add_argument("--question", required=True)
     p_ask.add_argument("--k", type=int, default=8)
     p_ask.add_argument("--top-n", type=int, default=5)
+    p_ask.add_argument("--language", default=APP_LANGUAGE, choices=tuple(LANGUAGE_NAMES.keys()))
 
     args = parser.parse_args()
 
@@ -201,7 +217,7 @@ def main() -> None:
         print(f"Indexed {docs_n} pages into {chunks_n} chunks in {CHROMA_DIR}")
     elif args.cmd == "ask":
         try:
-            answer, docs = answer_question(args.question, k=args.k, top_n=args.top_n)
+            answer, docs = answer_question(args.question, k=args.k, top_n=args.top_n, language=args.language)
         except ValueError as exc:
             print(str(exc))
             return

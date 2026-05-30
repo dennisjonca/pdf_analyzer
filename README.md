@@ -50,11 +50,19 @@ Ask a question:
 python rag_app.py ask --question "What are the main conclusions?"
 ```
 
+Ask in German (Antwort auf Deutsch):
+
+```bash
+python rag_app.py ask --question "Was sind die wichtigsten Erkenntnisse?" --language de
+```
+
 ## Streamlit usage
 
 ```bash
 streamlit run rag_app.py
 ```
+
+In Streamlit, choose **"Antwortsprache / Answer language"** and select **Deutsch** for German answers.
 
 ## Optional environment variables
 
@@ -63,3 +71,4 @@ streamlit run rag_app.py
 - `RERANK_MODEL` (default: `BAAI/bge-reranker-base`)
 - `CHROMA_DIR` (default: `./chroma_db`)
 - `CHROMA_COLLECTION` (default: `pdf_chunks`)
+- `APP_LANGUAGE` (default: `en`, supported: `en`, `de`)
