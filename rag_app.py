@@ -18,16 +18,17 @@ from pathlib import Path
 from typing import List, Sequence, Tuple
 
 import chromadb
-from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
+from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
-from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_core.retrievers import BaseRetriever
 from langchain_chroma import Chroma
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
+from pypdf import PdfReader
+from rank_bm25 import BM25Okapi
+from sentence_transformers import CrossEncoder
 
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large")
@@ -39,6 +40,27 @@ APP_LANGUAGE = os.getenv("APP_LANGUAGE", "en")
 DEFAULT_RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "12"))
 DEFAULT_RERANK_TOP_N = int(os.getenv("RERANK_TOP_N", "6"))
 LANGUAGE_NAMES = {"en": "English", "de": "German"}
+_RERANKER: CrossEncoder | None = None
+
+
+def _tokenize_for_bm25(text: str) -> List[str]:
+    return re.findall(r"\w+", text.lower())
+
+
+class RankBM25Retriever(BaseRetriever):
+    docs: List[Document]
+    k: int = DEFAULT_RETRIEVAL_K
+
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+    ) -> List[Document]:
+        if not self.docs:
+            return []
+        tokenized_corpus = [_tokenize_for_bm25(doc.page_content) for doc in self.docs]
+        bm25 = BM25Okapi(tokenized_corpus)
+        scores = bm25.get_scores(_tokenize_for_bm25(query))
+        top_indices = sorted(range(len(scores)), key=scores.__getitem__, reverse=True)[: self.k]
+        return [self.docs[i] for i in top_indices]
 
 
 def validate_pdf_dir(pdf_dir: Path) -> Path:
@@ -57,16 +79,14 @@ def validate_pdf_dir(pdf_dir: Path) -> Path:
 def pdf_documents(pdf_dir: Path) -> List[Document]:
     docs: List[Document] = []
     for pdf in sorted(pdf_dir.glob("*.pdf")):
-        loader = PyPDFLoader(str(pdf))
-        pages = loader.load()
-        for p in pages:
-            p.metadata = {
-                **p.metadata,
-                "source": str(pdf),
-                "filename": pdf.name,
-                "page": p.metadata.get("page", 0),
-            }
-        docs.extend(pages)
+        reader = PdfReader(str(pdf))
+        for page_index, page in enumerate(reader.pages):
+            docs.append(
+                Document(
+                    page_content=page.extract_text() or "",
+                    metadata={"source": str(pdf), "filename": pdf.name, "page": page_index},
+                )
+            )
     return docs
 
 
@@ -170,8 +190,7 @@ def build_hybrid_retriever(k: int = DEFAULT_RETRIEVAL_K) -> EnsembleRetriever:
     ]
     if not all_docs:
         all_docs = store.similarity_search(" ", k=max(k * 20, 300))
-    bm25 = BM25Retriever.from_documents(all_docs)
-    bm25.k = k
+    bm25 = RankBM25Retriever(docs=all_docs, k=k)
 
     return EnsembleRetriever(retrievers=[bm25, vector_retriever], weights=[0.4, 0.6])
 
@@ -179,8 +198,14 @@ def build_hybrid_retriever(k: int = DEFAULT_RETRIEVAL_K) -> EnsembleRetriever:
 def rerank(question: str, docs: Sequence[Document], top_n: int = DEFAULT_RERANK_TOP_N) -> List[Document]:
     if not docs:
         return []
-    compressor = CrossEncoderReranker(model=HuggingFaceCrossEncoder(model_name=RERANK_MODEL), top_n=top_n)
-    return compressor.compress_documents(list(docs), query=question)
+    docs_list = list(docs)
+    global _RERANKER
+    if _RERANKER is None:
+        _RERANKER = CrossEncoder(RERANK_MODEL)
+    pairs = [(question, doc.page_content) for doc in docs_list]
+    scores = _RERANKER.predict(pairs)
+    top_indices = sorted(range(len(scores)), key=scores.__getitem__, reverse=True)[:top_n]
+    return [docs_list[i] for i in top_indices]
 
 
 def answer_question(
