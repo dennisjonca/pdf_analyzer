@@ -12,6 +12,7 @@ Features included:
 - PDF ingestion with metadata (`filename`, `source`, `page`)
 - ChromaDB persistent vector store
 - Paragraph-aware, heading-aware chunking with page-preserving metadata
+- Table/list-aware chunk handling for technical PDFs
 - Hybrid retrieval (BM25 + Vector Search) with larger default candidate set
 - Re-ranking (`BAAI/bge-reranker-v2-m3` by default)
 - Source citations in responses
@@ -41,6 +42,12 @@ Index PDFs:
 
 ```bash
 python rag_app.py index --pdf-dir ./pdfs
+```
+
+Tune chunking for technical PDFs (tables/spec lists):
+
+```bash
+python rag_app.py index --pdf-dir ./pdfs --chunk-size 700 --chunk-overlap 160
 ```
 
 > Note: for safety, `--pdf-dir` must resolve to a directory inside the current working directory.
@@ -78,8 +85,15 @@ If your question asks for CSV output, the app also shows a **Download CSV** butt
 - `LLM_MODEL` (default: `llama3.1:8b`)
 - `EMBEDDING_MODEL` (default: `mxbai-embed-large`)
 - `RERANK_MODEL` (default: `BAAI/bge-reranker-v2-m3`)
+- `CHUNK_SIZE` (default: `700`)
+- `CHUNK_OVERLAP` (default: `160`)
+- `TABLE_LINES_PER_CHUNK` (default: `6`)
 - `RETRIEVAL_K` (default: `12`)
 - `RERANK_TOP_N` (default: `6`)
 - `CHROMA_DIR` (default: `./chroma_db`)
 - `CHROMA_COLLECTION` (default: `pdf_chunks`)
 - `APP_LANGUAGE` (default: `en`, supported: `en`, `de`)
+
+## Optimization manual
+
+See `/tmp/workspace/dennisjonca/pdf_analyzer/MANUAL_TO_OPTIMIZE.md` for a parameter-by-parameter tuning guide and recommended profiles for technical PDFs.

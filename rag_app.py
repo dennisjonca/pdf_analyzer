@@ -37,6 +37,9 @@ RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
 CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "pdf_chunks")
 APP_LANGUAGE = os.getenv("APP_LANGUAGE", "en")
+DEFAULT_CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "700"))
+DEFAULT_CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "160"))
+DEFAULT_TABLE_LINES_PER_CHUNK = int(os.getenv("TABLE_LINES_PER_CHUNK", "6"))
 DEFAULT_RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "12"))
 DEFAULT_RERANK_TOP_N = int(os.getenv("RERANK_TOP_N", "6"))
 LANGUAGE_NAMES = {"en": "English", "de": "German"}
@@ -118,6 +121,21 @@ def is_heading(text: str) -> bool:
     return uppercase_ratio > 0.6 or value.istitle()
 
 
+def is_table_or_list_block(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 3:
+        return False
+    signals = 0
+    for line in lines:
+        if re.match(r"^([-*•]|\d+[.)])\s+", line):
+            signals += 1
+        elif "|" in line or "\t" in line or re.search(r"\s{2,}", line):
+            signals += 1
+        elif re.search(r"[A-Za-zÄÖÜäöü]", line) and re.search(r"\d", line):
+            signals += 1
+    return signals >= max(2, len(lines) // 2)
+
+
 def paragraph_documents(docs: Sequence[Document]) -> List[Document]:
     paragraph_docs: List[Document] = []
     for doc in docs:
@@ -134,17 +152,26 @@ def paragraph_documents(docs: Sequence[Document]) -> List[Document]:
             metadata = dict(doc.metadata)
             if current_heading:
                 metadata["heading"] = current_heading
-            paragraph_docs.append(Document(page_content=part, metadata=metadata))
+            if is_table_or_list_block(part):
+                lines = [line.strip() for line in part.splitlines() if line.strip()]
+                for i in range(0, len(lines), DEFAULT_TABLE_LINES_PER_CHUNK):
+                    paragraph_docs.append(
+                        Document(page_content="\n".join(lines[i : i + DEFAULT_TABLE_LINES_PER_CHUNK]), metadata=metadata)
+                    )
+            else:
+                paragraph_docs.append(Document(page_content=part, metadata=metadata))
     return paragraph_docs or list(docs)
 
 
-def split_documents(docs: Sequence[Document], chunk_size: int = 1000, overlap: int = 150) -> List[Document]:
+def split_documents(
+    docs: Sequence[Document], chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP
+) -> List[Document]:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=overlap,
-        separators=["\n# ", "\n## ", "\n### ", "\n\n", "\n", ". ", " ", ""],
+        separators=["\n# ", "\n## ", "\n### ", "\n\n", "\n- ", "\n* ", "\n• ", "\n|", "\n", ". ", "; ", " ", ""],
     )
     return splitter.split_documents(paragraph_documents(docs))
 
@@ -164,9 +191,17 @@ def get_vectorstore() -> Chroma:
     )
 
 
-def index_pdfs(pdf_dir: Path) -> Tuple[int, int]:
+def index_pdfs(
+    pdf_dir: Path, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP
+) -> Tuple[int, int]:
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be > 0")
+    if overlap < 0:
+        raise ValueError("chunk_overlap must be >= 0")
+    if overlap >= chunk_size:
+        raise ValueError("chunk_overlap must be smaller than chunk_size")
     docs = pdf_documents(validate_pdf_dir(pdf_dir))
-    chunks = split_documents(docs)
+    chunks = split_documents(docs, chunk_size=chunk_size, overlap=overlap)
     store = get_vectorstore()
     store.delete_collection()
     store = get_vectorstore()
@@ -274,11 +309,13 @@ def render_streamlit() -> None:
     answer_language = language_labels[selected_label]
 
     pdf_dir = st.text_input("PDF directory", value="./pdfs")
+    chunk_size = st.number_input("Chunk size", min_value=200, max_value=2000, value=DEFAULT_CHUNK_SIZE, step=50)
+    chunk_overlap = st.number_input("Chunk overlap", min_value=0, max_value=500, value=DEFAULT_CHUNK_OVERLAP, step=10)
 
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Index PDFs"):
-            docs_n, chunks_n = index_pdfs(Path(pdf_dir))
+            docs_n, chunks_n = index_pdfs(Path(pdf_dir), chunk_size=int(chunk_size), overlap=int(chunk_overlap))
             st.success(f"Indexed {docs_n} pages into {chunks_n} chunks.")
 
     question = st.text_area("Ask a question about your PDFs")
@@ -311,6 +348,8 @@ def main() -> None:
 
     p_index = sub.add_parser("index", help="Index PDFs into ChromaDB")
     p_index.add_argument("--pdf-dir", default="./pdfs", type=Path)
+    p_index.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
+    p_index.add_argument("--chunk-overlap", type=int, default=DEFAULT_CHUNK_OVERLAP)
 
     p_ask = sub.add_parser("ask", help="Ask question over indexed PDFs")
     p_ask.add_argument("--question", required=True)
@@ -323,7 +362,11 @@ def main() -> None:
 
     if args.cmd == "index":
         try:
-            docs_n, chunks_n = index_pdfs(args.pdf_dir)
+            docs_n, chunks_n = index_pdfs(
+                args.pdf_dir,
+                chunk_size=args.chunk_size,
+                overlap=args.chunk_overlap,
+            )
         except (ValueError, FileNotFoundError) as exc:
             print(str(exc))
             return
