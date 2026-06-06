@@ -13,10 +13,17 @@ def ensure_directory(path: str | Path) -> Path:
     return resolved
 
 
+def require_directory(path: str | Path) -> Path:
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.exists():
+        raise RuntimeError(f"Verzeichnis nicht gefunden: {resolved}")
+    if not resolved.is_dir():
+        raise RuntimeError(f"Pfad ist kein Verzeichnis: {resolved}")
+    return resolved
+
+
 def scan_pdfs(input_dir: str | Path) -> list[Path]:
-    root = Path(input_dir)
-    if not root.exists():
-        return []
+    root = require_directory(input_dir)
     return sorted(path for path in root.rglob("*.pdf") if path.is_file())
 
 

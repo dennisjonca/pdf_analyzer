@@ -8,7 +8,7 @@ from config import CONFIG
 from pipeline.batch_processor import BatchProcessor, BatchReport
 from pipeline.embedder import ChromaEmbedder
 from pipeline.retriever import RetrievalResponse, Retriever
-from utils.file_utils import ensure_directory, reset_directory_contents
+from utils.file_utils import ensure_directory, require_directory, reset_directory_contents
 from utils.logger import setup_logging
 
 
@@ -29,8 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def ingest_documents(input_dir: str, reset: bool, config: dict | None = None) -> BatchReport:
     current_config = config or CONFIG
+    validated_input_dir = require_directory(input_dir)
     setup_logging(current_config["log_dir"])
-    ensure_directory(input_dir)
     ensure_directory(current_config["error_dir"])
     ensure_directory(current_config["chroma_dir"])
     processor = BatchProcessor(current_config)
@@ -40,7 +40,7 @@ def ingest_documents(input_dir: str, reset: bool, config: dict | None = None) ->
         if processed_index.exists():
             processed_index.unlink()
         reset_directory_contents(current_config["error_dir"])
-    return processor.run(input_dir)
+    return processor.run(str(validated_input_dir))
 
 
 def run_ingest(input_dir: str, reset: bool) -> int:
