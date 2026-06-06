@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+data/chroma_db/*
+data/errors/*
+data/logs/*
+data/processed_hashes.json
+!data/chroma_db/.gitkeep
+!data/errors/.gitkeep
+!data/input/.gitkeep
+!data/logs/.gitkeep
