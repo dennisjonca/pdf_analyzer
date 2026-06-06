@@ -15,7 +15,7 @@ CONFIG = {
     "table_layout_file": str(BASE_DIR / "data" / "logs" / "table_layouts.json"),
     "new_table_log_file": str(BASE_DIR / "data" / "logs" / "neue_tabellentypen.log"),
     "llm_model": "llama3.2",
-    "embed_model": "nomic-embed-text",
+    "embed_model": "mxbai-embed-large",
     "chunk_size": 500,
     "chunk_overlap": 50,
     "ocr_languages": ["de", "en"],

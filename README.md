@@ -1,6 +1,6 @@
 # pdf_analyzer
 
-Lokale RAG-Pipeline für die Massenverarbeitung von PDFs mit Dokumentklassifikation, Tabellen-/Textextraktion, semantischer Normalisierung und CLI-Suche.
+Lokale RAG-Pipeline für die Massenverarbeitung von PDFs mit Dokumentklassifikation, Tabellen-/Textextraktion, semantischer Normalisierung, CLI-Suche und einer Streamlit-Oberfläche.
 
 ## Architektur
 
@@ -21,7 +21,7 @@ Die Pipeline ist lokal/offline ausgelegt und benötigt folgende Dienste bzw. Sys
 2. Ollama lokal:
    - `ollama serve`
    - `ollama pull llama3.2`
-   - `ollama pull nomic-embed-text`
+   - `ollama pull mxbai-embed-large`
 3. Ghostscript für Camelot:
    - Ubuntu/Debian: `sudo apt install ghostscript`
    - macOS: `brew install ghostscript`
@@ -57,6 +57,14 @@ python main.py search --query "Was ist der Gesamtbetrag der Rechnung vom März 2
 python main.py search --query "Alle Positionen von Lieferant Müller GmbH" --type rechnung
 python main.py search --query "Zahlungsziel" --type rechnung --top-k 10
 ```
+
+### Streamlit-Oberfläche
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Die Oberfläche bietet einen einfachen Ingest-Workflow (inkl. optionalem Reset) sowie eine lokale Suche mit Quellenanzeige.
 
 ## Hinweise zur Extraktion
 

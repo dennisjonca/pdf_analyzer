@@ -5,9 +5,9 @@ import json
 from pathlib import Path
 
 from config import CONFIG
-from pipeline.batch_processor import BatchProcessor
+from pipeline.batch_processor import BatchProcessor, BatchReport
 from pipeline.embedder import ChromaEmbedder
-from pipeline.retriever import Retriever
+from pipeline.retriever import RetrievalResponse, Retriever
 from utils.file_utils import ensure_directory, reset_directory_contents
 from utils.logger import setup_logging
 
@@ -27,20 +27,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_ingest(input_dir: str, reset: bool) -> int:
-    setup_logging(CONFIG["log_dir"])
-    ensure_directory(CONFIG["input_dir"])
-    ensure_directory(CONFIG["error_dir"])
-    ensure_directory(CONFIG["chroma_dir"])
-    processor = BatchProcessor()
+def ingest_documents(input_dir: str, reset: bool, config: dict | None = None) -> BatchReport:
+    current_config = config or CONFIG
+    setup_logging(current_config["log_dir"])
+    ensure_directory(input_dir)
+    ensure_directory(current_config["error_dir"])
+    ensure_directory(current_config["chroma_dir"])
+    processor = BatchProcessor(current_config)
     if reset:
         processor.embedder.reset()
-        processed_index = Path(CONFIG["processed_index_file"])
+        processed_index = Path(current_config["processed_index_file"])
         if processed_index.exists():
             processed_index.unlink()
-        reset_directory_contents(CONFIG["error_dir"])
+        reset_directory_contents(current_config["error_dir"])
+    return processor.run(input_dir)
+
+
+def run_ingest(input_dir: str, reset: bool) -> int:
     try:
-        report = processor.run(input_dir)
+        report = ingest_documents(input_dir, reset)
     except RuntimeError as exc:
         print(f"Fehler beim Ingest: {exc}")
         return 1
@@ -58,12 +63,22 @@ def run_ingest(input_dir: str, reset: bool) -> int:
     return 0 if report.failed == 0 else 1
 
 
-def run_search(query: str, doc_type: str | None, top_k: int) -> int:
-    embedder = ChromaEmbedder()
-    retriever = Retriever(embedder)
+def search_documents(
+    query: str,
+    doc_type: str | None,
+    top_k: int,
+    config: dict | None = None,
+) -> RetrievalResponse:
+    current_config = config or CONFIG
+    embedder = ChromaEmbedder(current_config)
+    retriever = Retriever(embedder, config=current_config)
     filters = {"doc_type": doc_type} if doc_type else None
+    return retriever.beantworte(query, filter=filters, top_k=top_k)
+
+
+def run_search(query: str, doc_type: str | None, top_k: int) -> int:
     try:
-        response = retriever.beantworte(query, filter=filters, top_k=top_k)
+        response = search_documents(query, doc_type, top_k)
     except RuntimeError as exc:
         print(f"Fehler bei der Suche: {exc}")
         return 1
